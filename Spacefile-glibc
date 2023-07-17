@@ -1,0 +1,12 @@
+# Spacefile Docs: https://go.deta.dev/docs/spacefile/v0
+v: 0
+micros:
+  - name: main
+    src: .
+    engine: custom
+    dev: cargo run
+    commands:
+      - cargo build --release
+    run: target/release/sys-info
+    include:
+      - target/release/sys-info
