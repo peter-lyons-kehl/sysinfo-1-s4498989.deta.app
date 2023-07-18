@@ -6,8 +6,7 @@ micros:
     engine: custom
     dev: cargo run
     commands:
-      - rustup target add x86_64-unknown-linux-musl
-      - cargo build --release --target=x86_64-unknown-linux-musl
-    run: target/x86_64-unknown-linux-musl/release/sys-info
+      - cargo build --release
+    run: target/release/sys-info
     include:
-      - target/x86_64-unknown-linux-musl/release/sys-info
+      - target/release/sys-info
