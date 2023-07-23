@@ -16,14 +16,16 @@ async fn content() -> String {
     //
     // If your Linux or Mac OS doesn't support the following locations, and you can figure out how
     // to determine it, feel free to file a pull request.
-    let free = util::run("/usr/bin/free", |prog| {
+    /*let free = util::run("/usr/bin/free", |prog| {
         prog.arg("-m");
     });
     let tmpfs = util::run("/bin/df", |prog| {
         prog.arg("-m").arg("/tmp");
     });
+
     let (free, tmpfs) = (free.await, tmpfs.await);
-    util::handle_errors(
+
+    util::stringify_errors(
         || Ok((free?, tmpfs?)),
         |(free, tmpfs)| {
             "Sysinfo of (free tier) Deta.Space. Thank you Team Deta.Space & Love you.\n".to_owned()
@@ -35,7 +37,8 @@ async fn content() -> String {
                 + "df -m /tmp:\n"
                 + &tmpfs
         },
-    )
+    )*/
+    todo!()
 }
 
 // @TODO: Consider using `#[axum::debug_handler]` if I want to call `router.route("/", get(XYZ));`
@@ -54,6 +57,7 @@ async fn main() {
     let router = Router::new();
     let router = router.route("/locate_binaries", get(util::content_locate_binaries));
     let router = router.route("/", get(content));
+    let router = router.route("/ls", get(util::ls));
 
     // Run it with hyper on localhost.
     axum::Server::bind(&addr.parse().unwrap())
