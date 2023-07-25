@@ -127,7 +127,7 @@ pub fn ascii_bytes_to_string(bytes: Vec<u8>) -> String {
 /// drop.
 ///
 /// On success, return the program's output, treated as ASCII.
-pub async fn modify_and_run<P, F>(program: &P, modify: F) -> RunStringResult
+/*pub async fn modify_and_run<P, F>(program: &P, modify: F) -> RunStringResult
 where
     P: AsRef<OsStr> + Display,
     F: Fn(&mut Command),
@@ -139,9 +139,9 @@ where
         error,
     })?;
     Ok(ascii_bytes_to_string(out.stdout))
-}
+}*/
 
-pub async fn run<P, A, I>(mut command: Command) -> RunStringResult
+/*pub async fn run<P, A, I>(mut command: Command) -> RunStringResult
 where
     P: AsRef<OsStr> + Clone + Display,
     A: AsRef<OsStr> + Clone + Display,
@@ -152,6 +152,17 @@ where
         error,
     })?;
     Ok(ascii_bytes_to_string(out.stdout))
+}*/
+
+pub fn run<I>(
+    program: &'static str,
+    args: I,
+) -> RunProgress<&'static str, &'static str, I, impl Future<Output = IoResult<Output>>>
+where
+    I: Iterator<Item = &'static str> + Clone, //where I: IntoIterator<Item = &'static str> + Clone
+{
+    let program_and_args = ProgramAndArgs { program, args };
+    program_and_args.run()
 }
 
 pub fn where_is(
@@ -164,12 +175,13 @@ pub fn where_is(
 > {
     // - whereis, /bin/whereis, /usr/bin/whereis fail on Deta.Space
     // - which, /bin/which, /usr/bin/which fail, too.
-    // - only /usr/bin/which is present.
-    let program_and_args = ProgramAndArgs {
+    // -
+    /*let program_and_args = ProgramAndArgs {
         program: "/usr/bin/which",
         args: [program_to_locate].into_iter(),
     };
-    program_and_args.run()
+    program_and_args.run()*/
+    run("/usr/bin/which", [program_to_locate].into_iter())
 }
 
 /// Used to locate binaries. Why? See comments inside [content].
@@ -190,20 +202,42 @@ pub async fn content_locate_binaries() -> String {
     )
 }
 
+pub fn ls(
+    path_to_ls: &'static str,
+) -> RunProgress<
+    &'static str,
+    &'static str,
+    impl Iterator<Item = &'static str> + Clone,
+    impl Future<Output = IoResult<Output>>,
+> {
+    run("ls", [path_to_ls].into_iter())
+}
+
 pub async fn content_ls() -> String {
-    /*
-    let ls_current = run("ls", |_| ());
-    let ls_root = run("ls", |prog| {
-        prog.arg("/");
-    });
-    let (ls_current, ls_root) = (ls_current.await, ls_root.await);
+    let current = run("ls", [].into_iter());
+    let root = ls("/");
+    let bin = ls("/bin");
+    let sbin = ls("/sbin");
+
+    let (current, root, bin, sbin) = (
+        current.complete().await,
+        root.complete().await,
+        bin.complete().await,
+        sbin.complete().await,
+    );
     stringify_errors(
-        || Ok((ls_current?, ls_root?)),
-        |(ls_current, ls_root)| {
-            "ls current dir:\n".to_owned() + &ls_current + "\nls root:\n" + &ls_root
+        || Ok((current?, root?, bin?, sbin?)),
+        |(current, root, bin, sbin)| {
+            "ls current dir:\n".to_owned()
+                + &current
+                + "\n\nls /:\n"
+                + &root
+                + "\n\nls /bin:\n"
+                + &bin
+                + "\n\nls /sbin:\n"
+                + &sbin
         },
-    )*/
-    "TODO".to_owned()
+    )
 }
 
 /// Invoke the given `generator`. If successful, pass its result to `formatter`. If an error, format
