@@ -57,7 +57,7 @@ async fn main() {
     let router = Router::new();
     let router = router.route("/locate_binaries", get(util::content_locate_binaries));
     let router = router.route("/", get(content));
-    let router = router.route("/ls", get(util::ls));
+    let router = router.route("/ls", get(util::content_ls));
 
     // Run it with hyper on localhost.
     axum::Server::bind(&addr.parse().unwrap())

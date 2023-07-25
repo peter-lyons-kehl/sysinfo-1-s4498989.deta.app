@@ -17,7 +17,8 @@ impl Display for RunError {
         )
     }
 }
-pub type RunResult = Result<String, RunError>;
+pub type RunResult<T> = Result<T, RunError>;
+pub type RunStringResult = RunResult<String>;
 
 /// This "couples" the program execution ([Future]), and the program's executable & arguments
 /// ([ProgramAndArgs]). Why? So that we can later handle success & failure by the same function.
@@ -33,22 +34,6 @@ where
     /// This will always be [Some], but it has to be an [Option] because of ownership of `command`.
     future: Option<F>,
 }
-
-/* Generic params:
-/// - P: program (executable) name/path
-/// - A: argument (each)
-/// - RC: reference to a collection (of arguments)
-/// - C: collection (of arguments)
-pub struct ProgramAndArgsNoClone<'a, P, A, RC, C>
-where
-    P: AsRef<OsStr> + ToString,
-    A: AsRef<OsStr> + ToString + 'a,
-    RC: Deref<Target = C>,
-    II: IntoIterator<Item = &'a A>,
-{
-    program: P,
-    args: I,
-}*/
 
 #[derive(Clone)]
 pub struct ProgramAndArgs<P, A, I>
@@ -75,9 +60,7 @@ where
         command
     }
 
-    pub fn run(self) -> RunProgress<P, A, I, impl Future<Output = IoResult<Output>>>
-//where F:
-    {
+    pub fn run(self) -> RunProgress<P, A, I, impl Future<Output = IoResult<Output>>> {
         let mut run_progress = RunProgress {
             command: self.command(),
             program: self,
@@ -95,14 +78,17 @@ where
     A: AsRef<OsStr> + Clone + Display,
     I: Iterator<Item = A> + Clone,
 {
-    pub async fn complete(self) -> RunResult {
+    pub async fn complete(self) -> RunStringResult {
         if let Some(future) = self.future {
             let out = future.await;
             let out = out.map_err(|error| RunError {
                 program: Box::new(self.program.to_string()),
                 error,
             })?;
-            Ok(ascii_bytes_to_string(out.stdout))
+            Ok("OUT:\n".to_owned()
+                + &ascii_bytes_to_string(out.stdout)
+                + "\n\nERR:\n"
+                + &ascii_bytes_to_string(out.stderr))
         } else {
             unreachable!();
         }
@@ -141,7 +127,7 @@ pub fn ascii_bytes_to_string(bytes: Vec<u8>) -> String {
 /// drop.
 ///
 /// On success, return the program's output, treated as ASCII.
-pub async fn modify_and_run<P, F>(program: &P, modify: F) -> RunResult
+pub async fn modify_and_run<P, F>(program: &P, modify: F) -> RunStringResult
 where
     P: AsRef<OsStr> + Display,
     F: Fn(&mut Command),
@@ -155,7 +141,7 @@ where
     Ok(ascii_bytes_to_string(out.stdout))
 }
 
-pub async fn run<P, A, I>(mut command: Command) -> RunResult
+pub async fn run<P, A, I>(mut command: Command) -> RunStringResult
 where
     P: AsRef<OsStr> + Clone + Display,
     A: AsRef<OsStr> + Clone + Display,
@@ -168,25 +154,12 @@ where
     Ok(ascii_bytes_to_string(out.stdout))
 }
 
-pub async fn run_with_one_arg<P, F, A>(program: &P, arg: A) -> RunResult
-where
-    P: AsRef<OsStr> + Display,
-    F: Fn(&mut Command),
-    A: AsRef<OsStr>,
-    P: Display,
-{
-    /*run(program, move |prog| {
-        prog.arg(arg);
-    })*/
-    todo!()
-}
-
 pub fn where_is(
-    program: &'static str,
+    program_to_locate: &'static str,
 ) -> RunProgress<
     &'static str,
-    String,
-    impl Iterator<Item = String> + Clone,
+    &'static str,
+    impl Iterator<Item = &'static str> + Clone,
     impl Future<Output = IoResult<Output>>,
 > {
     // - whereis, /bin/whereis, /usr/bin/whereis fail on Deta.Space
@@ -194,7 +167,7 @@ pub fn where_is(
     // - only /usr/bin/which is present.
     let program_and_args = ProgramAndArgs {
         program: "/usr/bin/which",
-        args: [].into_iter(),
+        args: [program_to_locate].into_iter(),
     };
     program_and_args.run()
 }
@@ -217,7 +190,7 @@ pub async fn content_locate_binaries() -> String {
     )
 }
 
-pub async fn ls() -> String {
+pub async fn content_ls() -> String {
     /*
     let ls_current = run("ls", |_| ());
     let ls_root = run("ls", |prog| {
@@ -230,19 +203,20 @@ pub async fn ls() -> String {
             "ls current dir:\n".to_owned() + &ls_current + "\nls root:\n" + &ls_root
         },
     )*/
-    todo!()
+    "TODO".to_owned()
 }
 
 /// Invoke the given `generator`. If successful, pass its result to `formatter`. If an error, format
-/// into [String]. Useful especially when you have multiple [RunResult] instances, when it's
-/// ergonomic to use `?` short circuit operator, but you can't use it. What are such situations?
-/// When we want to use `?` operator in a function returning [String].
+/// the first error (as reported by `generator`) into [String]. Useful especially when you have
+/// multiple [RunStringResult] instances, when it's ergonomic to use `?` short circuit operator, but you
+/// can't use it. What are such situations? When we want to use `?` operator in a function returning
+/// [String].
 ///
 /// The first parameter (closure `source`) has to be [FnOnce], and not [Fn], because [RunError] and
-/// hence [Result<T, RunError>] is not [Copy].
+/// hence [RunResult<T>] is not [Copy].
 pub fn stringify_errors<T, G, F>(generator: G, formatter: F) -> String
 where
-    G: FnOnce() -> Result<T, RunError>,
+    G: FnOnce() -> RunResult<T>,
     F: Fn(T) -> String,
 {
     match generator() {
