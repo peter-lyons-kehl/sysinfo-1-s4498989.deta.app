@@ -19,6 +19,61 @@ impl Display for RunError {
 }
 pub type RunResult<T> = Result<T, RunError>;
 pub type RunStringResult = RunResult<String>;
+pub type TwinResult<T> = Result<T, T>;
+pub type StringTwinResult = TwinResult<String>;
+
+/// Like [TwinResult], but instead of being an `enum`, this has the Ok/Err discriminant exposed as a
+/// bool flag `is_ok`, and the wrapped value exposed as `value`.
+pub struct FlagTwin<T> {
+    pub is_ok: bool,
+    pub value: T,
+}
+pub type FlagString = FlagTwin<String>;
+pub type FlagTwinTuple<T> = (bool, T);
+
+pub fn twin_result_value<T>(r: TwinResult<T>) -> T {
+    match r {
+        Ok(value) => value,
+        Err(value) => value,
+    }
+}
+
+impl<T> FlagTwin<T> {
+    fn new(r: TwinResult<T>) -> Self {
+        Self {
+            is_ok: r.is_ok(),
+            value: twin_result_value(r),
+        }
+    }
+    fn chain<P>(self, next: TwinResult<P>) -> FlagTwin<(T, P)> {
+        let is_ok = self.is_ok && next.is_ok();
+        let next_value = twin_result_value(next);
+        FlagTwin {
+            is_ok,
+            value: (self.value, next_value),
+        }
+    }
+    fn and<P>(self, next: FlagTwin<P>) -> FlagTwin<(T, P)> {
+        FlagTwin {
+            is_ok: self.is_ok && next.is_ok,
+            value: (self.value, next.value),
+        }
+    }
+    // @TODO consider: -> (bool, T)
+    fn get(self) -> FlagTwinTuple<T> {
+        (self.is_ok, self.value)
+    }
+}
+/// It's redundant, but it makes code somewhat ergonomic.
+impl<T> FlagTwin</*FlagTwinTuple<*/ T> {
+    fn pair<P>(self, next: FlagTwin<P>) -> FlagTwin<(FlagTwinTuple<T>, FlagTwinTuple<P>)> {
+        FlagTwin {
+            is_ok: self.is_ok && next.is_ok,
+            value: ((self.is_ok, self.value), (next.is_ok, next.value)),
+        }
+    }
+}
+pub type FlagStringTwin = FlagTwin<String>;
 
 /// This "couples" the program execution ([Future]), and the program's executable & arguments
 /// ([ProgramAndArgs]). Why? So that we can later handle success & failure by the same function.
@@ -93,6 +148,25 @@ where
             unreachable!();
         }
     }
+
+    pub async fn complete_chainable(self) -> FlagStringTwin {
+        if let Some(future) = self.future {
+            let out = future.await;
+            let out = out.map_err(|error| RunError {
+                program: Box::new(self.program.to_string()),
+                error,
+            });
+            match out {
+                Ok(out) => FlagStringTwin::new(Ok("OUT:\n".to_owned()
+                    + &ascii_bytes_to_string(out.stdout)
+                    + "\n\nERR:\n"
+                    + &ascii_bytes_to_string(out.stderr))),
+                Err(err) => FlagStringTwin::new(Err(err.to_string())),
+            }
+        } else {
+            unreachable!();
+        }
+    }
 }
 
 impl<P, A, I> Display for ProgramAndArgs<P, A, I>
@@ -123,37 +197,6 @@ pub fn ascii_bytes_to_string(bytes: Vec<u8>) -> String {
     result
 }
 
-/// Start the program, with any arguments or other adjustments done in `modify` closure. Kill on
-/// drop.
-///
-/// On success, return the program's output, treated as ASCII.
-/*pub async fn modify_and_run<P, F>(program: &P, modify: F) -> RunStringResult
-where
-    P: AsRef<OsStr> + Display,
-    F: Fn(&mut Command),
-{
-    let mut command: Command = loop {}; //command(program); // @TODO
-    modify(&mut command);
-    let out = command.output().await.map_err(|error| RunError {
-        program: Box::new(program.to_string()),
-        error,
-    })?;
-    Ok(ascii_bytes_to_string(out.stdout))
-}*/
-
-/*pub async fn run<P, A, I>(mut command: Command) -> RunStringResult
-where
-    P: AsRef<OsStr> + Clone + Display,
-    A: AsRef<OsStr> + Clone + Display,
-    I: Iterator<Item = A> + Clone,
-{
-    let out = command.output().await.map_err(|error| RunError {
-        program: Box::new("TODO program".to_string()),
-        error,
-    })?;
-    Ok(ascii_bytes_to_string(out.stdout))
-}*/
-
 pub fn run<I>(
     program: &'static str,
     args: I,
@@ -175,17 +218,11 @@ pub fn where_is(
 > {
     // - whereis, /bin/whereis, /usr/bin/whereis fail on Deta.Space
     // - which, /bin/which, /usr/bin/which fail, too.
-    // -
-    /*let program_and_args = ProgramAndArgs {
-        program: "/usr/bin/which",
-        args: [program_to_locate].into_iter(),
-    };
-    program_and_args.run()*/
     run("/usr/bin/which", [program_to_locate].into_iter())
 }
 
 /// Used to locate binaries. Why? See comments inside [content].
-pub async fn content_locate_binaries() -> String {
+pub async fn content_locate_binaries() -> StringTwinResult {
     let free = where_is("free");
     let df = where_is("df");
     let mount = where_is("mount");
@@ -196,7 +233,7 @@ pub async fn content_locate_binaries() -> String {
         mount.complete().await,
         tree.complete().await,
     );
-    stringify_errors(
+    all_ok_formatted_or_first_error(
         || Ok((free?, df?, mount?, tree?)),
         |(free, df, mount, tree)| "".to_owned() + &free + "\n" + &df + "\n" + &mount + "\n" + &tree,
     )
@@ -213,7 +250,7 @@ pub fn ls(
     run("ls", [path_to_ls].into_iter())
 }
 
-pub async fn content_ls() -> String {
+pub async fn content_ls() -> StringTwinResult {
     let current = run("ls", [].into_iter());
     let root = ls("/");
     let bin = ls("/bin");
@@ -225,7 +262,7 @@ pub async fn content_ls() -> String {
         bin.complete().await,
         sbin.complete().await,
     );
-    stringify_errors(
+    all_ok_formatted_or_first_error(
         || Ok((current?, root?, bin?, sbin?)),
         |(current, root, bin, sbin)| {
             "ls current dir:\n".to_owned()
@@ -240,21 +277,55 @@ pub async fn content_ls() -> String {
     )
 }
 
+pub async fn content_ls2() -> StringTwinResult {
+    let current = run("ls", [].into_iter());
+    let root = ls("/");
+    let bin = ls("/bin");
+    let sbin = ls("/sbin");
+
+    let (current, root, bin, sbin) = (
+        current.complete_chainable().await,
+        root.complete_chainable().await,
+        bin.complete_chainable().await,
+        sbin.complete_chainable().await,
+    );
+    let chained = current.and(root).and(bin).and(sbin);
+
+    let (ok_err, (((current, root), bin), sbin)) = chained.get();
+    // TODO: Consider (bool, String) for each part:
+    //
+    // let (ok_err, ((((current_ok, current), (root_ok, root)), (bin_ok, bin)), (sbin_ok, sbin))) =
+    // chained.get();
+    //
+    // OR: Do return the structure containing (bool, String) pairs, but don't split them - keep them
+    // together, and pass them to a formatter:
+    //
+    // let (ok_err, (((current, root), bin), sbin)) = chained.get();
+    //
+    // twin_result(ok_err, "Current:\n" +formatted(current) +... )
+    //
+    //all_ok_or_any_errors
+    todo!()
+}
+
 /// Invoke the given `generator`. If successful, pass its result to `formatter`. If an error, format
 /// the first error (as reported by `generator`) into [String]. Useful especially when you have
-/// multiple [RunStringResult] instances, when it's ergonomic to use `?` short circuit operator, but you
-/// can't use it. What are such situations? When we want to use `?` operator in a function returning
-/// [String].
+/// multiple [RunStringResult] instances, when it's ergonomic to use `?` short circuit operator, but
+/// you can't use it. What are such situations? When we want to use `?` operator in a function
+/// returning [String].
+///
+/// Do NOT use a simple `ok_filter`, like `Ok((current?, root?, bin?, sbin?))`, if you must have all
+/// errors included.
 ///
 /// The first parameter (closure `source`) has to be [FnOnce], and not [Fn], because [RunError] and
 /// hence [RunResult<T>] is not [Copy].
-pub fn stringify_errors<T, G, F>(generator: G, formatter: F) -> String
+pub fn all_ok_formatted_or_first_error<T, G, F>(ok_filter: G, ok_formatter: F) -> StringTwinResult
 where
     G: FnOnce() -> RunResult<T>,
     F: Fn(T) -> String,
 {
-    match generator() {
-        Ok(content) => formatter(content),
-        Err(err) => format!("{err}"),
+    match ok_filter() {
+        Ok(content) => Ok(ok_formatter(content)),
+        Err(err) => Err(err.to_string()),
     }
 }
