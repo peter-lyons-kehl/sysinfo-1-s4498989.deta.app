@@ -1,9 +1,11 @@
 use core::future::Future;
+use std::io::Result as IoResult;
+use std::process::Output;
 use std::{ffi::OsStr, fmt::Display};
 use tokio::process::Command;
 
 pub struct RunError {
-    program: String,
+    program: Box<String>,
     error: std::io::Error,
 }
 impl Display for RunError {
@@ -17,7 +19,22 @@ impl Display for RunError {
 }
 pub type RunResult = Result<String, RunError>;
 
-/* Generic parmas:
+/// This "couples" the program execution ([Future]), and the program's executable & arguments
+/// ([ProgramAndArgs]). Why? So that we can later handle success & failure by the same function.
+pub struct RunProgress<P, A, I, F>
+where
+    F: Future<Output = IoResult<Output>>,
+    P: AsRef<OsStr> + Clone + Display,
+    A: AsRef<OsStr> + Clone + Display,
+    I: Iterator<Item = A> + Clone,
+{
+    program: ProgramAndArgs<P, A, I>,
+    command: Command,
+    /// This will always be [Some], but it has to be an [Option] because of ownership of `command`.
+    future: Option<F>,
+}
+
+/* Generic params:
 /// - P: program (executable) name/path
 /// - A: argument (each)
 /// - RC: reference to a collection (of arguments)
@@ -33,10 +50,11 @@ where
     args: I,
 }*/
 
+#[derive(Clone)]
 pub struct ProgramAndArgs<P, A, I>
 where
-    P: AsRef<OsStr> + Display,
-    A: AsRef<OsStr> + Display,
+    P: AsRef<OsStr> + Clone + Display,
+    A: AsRef<OsStr> + Clone + Display,
     I: Iterator<Item = A> + Clone,
 {
     program: P,
@@ -46,53 +64,65 @@ where
 impl<P, A, I> ProgramAndArgs<P, A, I>
 where
     P: AsRef<OsStr> + Clone + Display,
-    A: AsRef<OsStr> + Display,
+    A: AsRef<OsStr> + Clone + Display,
     I: Iterator<Item = A> + Clone,
 {
     /// Create a new [Command] based on `program` and `args`. Set it to `kill_on_drop`.
-    pub fn command(&self) -> Command {
+    fn command(&self) -> Command {
         let mut command = Command::new(self.program.clone());
         command.kill_on_drop(true);
         command.args(self.args.clone());
-        // OR:
-        for a in self.args.clone().into_iter() {
-            command.arg(a);
-        }
         command
+    }
+
+    pub fn run(self) -> RunProgress<P, A, I, impl Future<Output = IoResult<Output>>>
+//where F:
+    {
+        let mut run_progress = RunProgress {
+            command: self.command(),
+            program: self,
+            future: None,
+        };
+        run_progress.future = Some(run_progress.command.output());
+        run_progress
+    }
+}
+
+impl<P, A, I, F> RunProgress<P, A, I, F>
+where
+    F: Future<Output = IoResult<Output>>,
+    P: AsRef<OsStr> + Clone + Display,
+    A: AsRef<OsStr> + Clone + Display,
+    I: Iterator<Item = A> + Clone,
+{
+    pub async fn complete(self) -> RunResult {
+        if let Some(future) = self.future {
+            let out = future.await;
+            let out = out.map_err(|error| RunError {
+                program: Box::new(self.program.to_string()),
+                error,
+            })?;
+            Ok(ascii_bytes_to_string(out.stdout))
+        } else {
+            unreachable!();
+        }
     }
 }
 
 impl<P, A, I> Display for ProgramAndArgs<P, A, I>
 where
-    P: AsRef<OsStr> + Display,
-    A: AsRef<OsStr> + Display,
+    P: AsRef<OsStr> + Clone + Display,
+    A: AsRef<OsStr> + Clone + Display,
     I: Iterator<Item = A> + Clone,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.program)?;
-        //self.args.clone().into
+        let args = self.args.clone().collect::<Vec<_>>();
+        for a in args {
+            write!(f, " {}", a)?;
+        }
         Ok(())
     }
-}
-
-fn _use_program_and_args() {
-    let program = "ls".to_owned();
-    let args = vec!["-l".to_owned(), "-a".to_owned()];
-    let args_str = vec!["-l", "-a"];
-    #[allow(unused)]
-    let pa = ProgramAndArgs {
-        program: &program,
-        args: args.iter(),
-    };
-
-    let v = vec!["hi", "mate"];
-    let slice = &v[..];
-    let mut slice_iter = slice.iter();
-    slice_iter = slice.into_iter();
-    // WOW: A result of `map` (of an Iterator that is Clone) IS itself Clone.
-    let iter = slice_iter.map(|_| 1).clone();
-    #[allow(unused)]
-    iter.clone();
 }
 
 pub fn assert_linux() {
@@ -111,15 +141,28 @@ pub fn ascii_bytes_to_string(bytes: Vec<u8>) -> String {
 /// drop.
 ///
 /// On success, return the program's output, treated as ASCII.
-pub async fn run<P, F>(program: &P, modify: F) -> RunResult
+pub async fn modify_and_run<P, F>(program: &P, modify: F) -> RunResult
 where
-    P: AsRef<OsStr> + ToString,
+    P: AsRef<OsStr> + Display,
     F: Fn(&mut Command),
 {
     let mut command: Command = loop {}; //command(program); // @TODO
     modify(&mut command);
     let out = command.output().await.map_err(|error| RunError {
-        program: program.to_string(),
+        program: Box::new(program.to_string()),
+        error,
+    })?;
+    Ok(ascii_bytes_to_string(out.stdout))
+}
+
+pub async fn run<P, A, I>(mut command: Command) -> RunResult
+where
+    P: AsRef<OsStr> + Clone + Display,
+    A: AsRef<OsStr> + Clone + Display,
+    I: Iterator<Item = A> + Clone,
+{
+    let out = command.output().await.map_err(|error| RunError {
+        program: Box::new("TODO program".to_string()),
         error,
     })?;
     Ok(ascii_bytes_to_string(out.stdout))
@@ -127,9 +170,10 @@ where
 
 pub async fn run_with_one_arg<P, F, A>(program: &P, arg: A) -> RunResult
 where
-    P: AsRef<OsStr> + ToString,
+    P: AsRef<OsStr> + Display,
     F: Fn(&mut Command),
     A: AsRef<OsStr>,
+    P: Display,
 {
     /*run(program, move |prog| {
         prog.arg(arg);
@@ -137,31 +181,40 @@ where
     todo!()
 }
 
-/*pub fn where_is(program: &'static str) -> impl Future<Output = RunResult> {
+pub fn where_is(
+    program: &'static str,
+) -> RunProgress<
+    &'static str,
+    String,
+    impl Iterator<Item = String> + Clone,
+    impl Future<Output = IoResult<Output>>,
+> {
     // - whereis, /bin/whereis, /usr/bin/whereis fail on Deta.Space
-    // - which, /bin/which, /usr/bin/which fail, too:
-    //
-    // "No such file or directory (os error 2)."
-    run("/usr/bin/which", move |prog| {
-        prog.arg(program);
-    })
-}*/
+    // - which, /bin/which, /usr/bin/which fail, too.
+    // - only /usr/bin/which is present.
+    let program_and_args = ProgramAndArgs {
+        program: "/usr/bin/which",
+        args: [].into_iter(),
+    };
+    program_and_args.run()
+}
 
 /// Used to locate binaries. Why? See comments inside [content].
 pub async fn content_locate_binaries() -> String {
-    /*
     let free = where_is("free");
     let df = where_is("df");
     let mount = where_is("mount");
     let tree = where_is("tree");
-    let (free, df, mount, tree) = (free.await, df.await, mount.await, tree.await);
+    let (free, df, mount, tree) = (
+        free.complete().await,
+        df.complete().await,
+        mount.complete().await,
+        tree.complete().await,
+    );
     stringify_errors(
         || Ok((free?, df?, mount?, tree?)),
         |(free, df, mount, tree)| "".to_owned() + &free + "\n" + &df + "\n" + &mount + "\n" + &tree,
-    )*/
-
-    //Ok("".to_owned() + &free + "\n" + &df + "\n" + &mount); "".to_owned()
-    todo!()
+    )
 }
 
 pub async fn ls() -> String {
@@ -187,9 +240,9 @@ pub async fn ls() -> String {
 ///
 /// The first parameter (closure `source`) has to be [FnOnce], and not [Fn], because [RunError] and
 /// hence [Result<T, RunError>] is not [Copy].
-pub fn stringify_errors<T, S, F>(generator: S, formatter: F) -> String
+pub fn stringify_errors<T, G, F>(generator: G, formatter: F) -> String
 where
-    S: FnOnce() -> Result<T, RunError>,
+    G: FnOnce() -> Result<T, RunError>,
     F: Fn(T) -> String,
 {
     match generator() {
@@ -197,34 +250,3 @@ where
         Err(err) => format!("{err}"),
     }
 }
-
-/* **
-   ** Can't type these:
-
-pub async fn invoke_and_handle_errors<R: Future<Output = RunResult>, F: Fn() -> R>(
-    f: F,
-) -> Box<impl Fn() -> dyn Future<Output = String>> {
-    Box::new(async || {
-        let result = f().await;
-    match result {
-        Ok(content) => content,
-        Err(err) => format!("{err}"),
-    }
-    })
-}
-
-pub async fn invoke_and_handle_errors2<
-    R: Future<Output = RunResult>,
-    F: Fn() -> R,
-    //RR: Fn() -> dyn Future<Output = String>,
->(
-    f: F,
-) -> Box<impl Fn() -> dyn Future<Output = String>> {
-    Box::new(async || {
-        let result = f().await;
-    match result {
-        Ok(content) => content,
-        Err(err) => format!("{err}"),
-    }
-    })
-}*/
