@@ -45,7 +45,7 @@ impl<T> FlagTwin<T> {
             value: twin_result_value(r),
         }
     }
-    fn chain<P>(self, next: TwinResult<P>) -> FlagTwin<(T, P)> {
+    fn link<P>(self, next: TwinResult<P>) -> FlagTwin<(T, P)> {
         let is_ok = self.is_ok && next.is_ok();
         let next_value = twin_result_value(next);
         FlagTwin {
@@ -64,17 +64,103 @@ impl<T> FlagTwin<T> {
         (self.is_ok, self.value)
     }
 }
-/// It's redundant, but it makes code somewhat ergonomic.
-impl<T> FlagTwin</*FlagTwinTuple<*/ T> {
-    fn pair<P>(self, next: FlagTwin<P>) -> FlagTwin<(FlagTwinTuple<T>, FlagTwinTuple<P>)> {
+impl<T> FlagTwin<T> {
+    /// Goal:
+    /// 1. "Combine" the `is_ok` of any number (known in compile time) of [FlagTwin] instance(s), so
+    ///    that we have an overall logical AND of their [FlagTwin::is_ok], yet we
+    /// 2. Keep each "inner/original" [FlagTwin] instance's `is_ok` and `value`. Transform them into
+    ///    [FlagTwinTuple], so that they can be more concisely assigned to local variables ("pattern
+    ///    matched").
+    ///
+    /// The result's [FlagTwin::is_ok] is redundant, but it allows the consumer code to be shorter.
+    ///
+    /// This function "starts" the "chain".
+    pub fn pairable(self) -> FlagTwinPairable<T> {
+        FlagTwin {
+            is_ok: self.is_ok,
+            value: ((self.is_ok, self.value)),
+        }
+    }
+    /// An alternative to separate methods [FlagTwin::pair_first] and [FlagTwin::pair]. But having
+    /// just one method allowed more mistakes. How? This method would allows `T` to be of any type.
+    /// Instead, [FlagTwin::pair_first] requires `T` to be [FlagTwinTuple].)
+    ///
+    /// (This method is here for documentation only. Not planned to be used.)
+    #[allow(dead_code)]
+    #[doc(hidden)]
+    fn pair_one_method_instead_of_two<P>(
+        self,
+        next: FlagTwin<P>,
+    ) -> FlagTwin<(T, FlagTwinTuple<P>)> {
+        if true {
+            panic!("Don't use.");
+        }
         FlagTwin {
             is_ok: self.is_ok && next.is_ok,
-            value: ((self.is_ok, self.value), (next.is_ok, next.value)),
+            value: (self.value, (next.is_ok, next.value)),
+        }
+    }
+}
+// This doesn't need to exist as a `type` alias, but it helps understanding.
+pub type FlagTwinPairable<T> = FlagTwin<FlagTwinTuple<T>>;
+impl<T> FlagTwinPairable<T> {
+    pub fn pair_first<P>(self, next: FlagTwin<P>) -> FlagTwinPaired<FlagTwinTuple<T>, P> {
+        FlagTwin {
+            is_ok: self.is_ok && next.is_ok,
+            value: (self.value, (next.is_ok, next.value)),
+        }
+    }
+}
+pub type FlagTwinPaired<T, P> = FlagTwin<(T, FlagTwinTuple<P>)>;
+impl<T, P> FlagTwinPaired<T, P> {
+    pub fn pair<R>(self, next: FlagTwin<R>) -> FlagTwinPaired<(T, FlagTwinTuple<P>), R> {
+        FlagTwin {
+            is_ok: self.is_ok && next.is_ok,
+            value: (self.value, (next.is_ok, next.value)),
         }
     }
 }
 pub type FlagStringTwin = FlagTwin<String>;
 
+/// Restructure into a chain.
+///
+/// Used with `let` keyword (in place of a variable name) for destructuring/pattern matching results
+/// of [FlagTwinPairable::pair_first] and [FlagTwinPaired::pair] into local variables (whose names
+/// are passed to this macro).
+#[macro_export]
+macro_rules! flatten {
+    ($all_ok:pat, $single_tuple:pat) => {
+        ($all_ok, $single_tuple)
+    };
+    /*($all_ok:pat, $left_tuple:pat, $right_tuple:pat) => {
+        flatten!(PARTIAL $all_ok, ($left_tuple, $right_tuple))
+    };*/
+    ($all_ok:pat, $left_tuple:pat, $right_tuple:pat $(, $another_tuple:pat)*) => {
+        flatten!(PARTIAL $all_ok, ($left_tuple, $right_tuple) $(, $another_tuple)*)
+    };
+    (PARTIAL $all_ok:pat, $cumulated:tt, $next_tuple:pat $(, $another_tuple:pat)*) => {
+        flatten!(PARTIAL $all_ok, ($cumulated, $next_tuple) $(, $another_tuple)*)
+    };
+    (PARTIAL $all_ok:pat, $cumulated:tt) => {
+        ($all_ok, $cumulated)
+    }
+}
+/*macro_rules! expre {
+    ($expre:pat) => {
+        ($expre,)
+    };
+}
+fn _f() {
+    let ((a, b),) = ((0, 1),);
+    let expre!((a, b)) =  ((0, 1),);
+    let _a = a;
+
+    let expre!(x) = (1,);
+    let _x = x;
+
+    let (mut c, mut d) = (0, 0);
+    (d, c) = (a, b);
+}*/
 /// This "couples" the program execution ([Future]), and the program's executable & arguments
 /// ([ProgramAndArgs]). Why? So that we can later handle success & failure by the same function.
 pub struct RunProgress<P, A, I, F>
@@ -289,22 +375,66 @@ pub async fn content_ls2() -> StringTwinResult {
         bin.complete_chainable().await,
         sbin.complete_chainable().await,
     );
-    let chained = current.and(root).and(bin).and(sbin);
+    #[allow(unused)]
+    if true {
+        let chained = current.and(root).and(bin).and(sbin);
 
-    let (ok_err, (((current, root), bin), sbin)) = chained.get();
-    // TODO: Consider (bool, String) for each part:
-    //
-    // let (ok_err, ((((current_ok, current), (root_ok, root)), (bin_ok, bin)), (sbin_ok, sbin))) =
-    // chained.get();
-    //
-    // OR: Do return the structure containing (bool, String) pairs, but don't split them - keep them
-    // together, and pass them to a formatter:
-    //
-    // let (ok_err, (((current, root), bin), sbin)) = chained.get();
-    //
-    // twin_result(ok_err, "Current:\n" +formatted(current) +... )
-    //
-    //all_ok_or_any_errors
+        let (all_ok, (((current, root), bin), sbin)) = chained.get();
+    } else {
+        // (bool, String) for each pair:
+        if true {
+        } else if true {
+            let chained = current.pairable();
+            let (all_ok, (current_ok, current)) = chained.get();
+            // -------
+        } else if true {
+            let chained = current.pairable().pair_first(root);
+            let (all_ok, (rest, (root_ok, root))) = chained.get();
+        } else if true {
+            let chained = current.pairable().pair_first(root);
+            let (all_ok, ((current_ok, current), (root_ok, root))) = chained.get();
+            // -------
+        } else if true {
+            let chained = current.pairable().pair_first(root).pair(bin);
+            let (all_ok, ((rest, (root_ok, root)), (bin_ok, bin))) = chained.get();
+        } else if true {
+            let chained = current.pairable().pair_first(root).pair(bin);
+            let (all_ok, (((current_ok, current), (root_ok, root)), (bin_ok, bin))) = chained.get();
+            // -------
+        } else if true {
+            let chained = current.pairable().pair_first(root).pair(bin).pair(sbin);
+            let (all_ok, (((rest, (root_ok, root)), (bin_ok, bin)), (sbin_ok, sbin))) =
+                chained.get();
+        } else if true {
+            let chained = current.pairable().pair_first(root).pair(bin).pair(sbin);
+            if true {
+                let (
+                    all_ok,
+                    ((((current_ok, current), (root_ok, root)), (bin_ok, bin)), (sbin_ok, sbin)),
+                ) = chained.get();
+            } else {
+                let flatten!(
+                    all_ok,
+                    (current_ok, current),
+                    (root_ok, root),
+                    (bin_ok, bin),
+                    (sbin_ok, sbin)
+                ) = chained.get();
+            }
+        }
+        //
+        //let (all_ok, (((current_ok, current), (root_ok, root)), (bin_ok, bin)), (sbin_ok, sbin)) =
+        //chained.get();
+        //
+        // OR: Do return the structure containing (bool, String) pairs, but don't split them - keep
+        // them together, and pass them to a formatter:
+        //
+        // let (ok_err, (((current, root), bin), sbin)) = chained.get();
+        //
+        // twin_result(ok_err, "Current:\n" +formatted(current) +... )
+        //
+        //all_ok_or_any_errors
+    }
     todo!()
 }
 
