@@ -28,7 +28,7 @@ pub struct FlagTwin<T> {
     pub is_ok: bool,
     pub value: T,
 }
-pub type FlagString = FlagTwin<String>;
+//pub type FlagString = FlagTwin<String>;
 pub type FlagTwinTuple<T> = (bool, T);
 
 pub fn twin_result_value<T>(r: TwinResult<T>) -> T {
@@ -45,6 +45,7 @@ impl<T> FlagTwin<T> {
             value: twin_result_value(r),
         }
     }
+
     fn link<P>(self, next: TwinResult<P>) -> FlagTwin<(T, P)> {
         let is_ok = self.is_ok && next.is_ok();
         let next_value = twin_result_value(next);
@@ -59,12 +60,12 @@ impl<T> FlagTwin<T> {
             value: (self.value, next.value),
         }
     }
+
     // @TODO consider: -> (bool, T)
-    fn get(self) -> FlagTwinTuple<T> {
+    fn split(self) -> FlagTwinTuple<T> {
         (self.is_ok, self.value)
     }
-}
-impl<T> FlagTwin<T> {
+
     /// Goal:
     /// 1. "Combine" the `is_ok` of any number (known in compile time) of [FlagTwin] instance(s), so
     ///    that we have an overall logical AND of their [FlagTwin::is_ok], yet we
@@ -101,7 +102,8 @@ impl<T> FlagTwin<T> {
         }
     }
 }
-// This doesn't need to exist as a `type` alias, but it helps understanding.
+
+// This doesn't need to exist as a `type` alias, but it helps with understanding.
 pub type FlagTwinPairable<T> = FlagTwin<FlagTwinTuple<T>>;
 impl<T> FlagTwinPairable<T> {
     pub fn pair_first<P>(self, next: FlagTwin<P>) -> FlagTwinPaired<FlagTwinTuple<T>, P> {
@@ -111,6 +113,8 @@ impl<T> FlagTwinPairable<T> {
         }
     }
 }
+
+// This doesn't need to exist as a `type` alias, but it helps with understanding.
 pub type FlagTwinPaired<T, P> = FlagTwin<(T, FlagTwinTuple<P>)>;
 impl<T, P> FlagTwinPaired<T, P> {
     pub fn pair<R>(self, next: FlagTwin<R>) -> FlagTwinPaired<(T, FlagTwinTuple<P>), R> {
@@ -288,7 +292,7 @@ pub fn run<I>(
     args: I,
 ) -> RunProgress<&'static str, &'static str, I, impl Future<Output = IoResult<Output>>>
 where
-    I: Iterator<Item = &'static str> + Clone, //where I: IntoIterator<Item = &'static str> + Clone
+    I: Iterator<Item = &'static str> + Clone,
 {
     let program_and_args = ProgramAndArgs { program, args };
     program_and_args.run()
@@ -336,35 +340,52 @@ pub fn ls(
     run("ls", [path_to_ls].into_iter())
 }
 
+pub fn ls_l(
+    path_to_ls: &'static str,
+) -> RunProgress<
+    &'static str,
+    &'static str,
+    impl Iterator<Item = &'static str> + Clone,
+    impl Future<Output = IoResult<Output>>,
+> {
+    run("ls", ["-l", path_to_ls].into_iter())
+}
+
 pub async fn content_ls() -> StringTwinResult {
-    let current = run("ls", [].into_iter());
-    let root = ls("/");
+    let current = ls_l(".");
+    let root = ls_l("/");
     let bin = ls("/bin");
     let sbin = ls("/sbin");
+    let tmp = ls_l("/tmp");
 
-    let (current, root, bin, sbin) = (
+    // This could be optimized more. On any error, we print only the leftmost failed process. Hence,
+    // we could skip `.await` for the rest - but code would get complicated.
+    let (current, root, bin, sbin, tmp) = (
         current.complete().await,
         root.complete().await,
         bin.complete().await,
         sbin.complete().await,
+        tmp.complete().await,
     );
     all_ok_formatted_or_first_error(
-        || Ok((current?, root?, bin?, sbin?)),
-        |(current, root, bin, sbin)| {
-            "ls current dir:\n".to_owned()
+        || Ok((current?, root?, bin?, sbin?, tmp?)),
+        |(current, root, bin, sbin, tmp)| {
+            "ls -l . :\n".to_owned()
                 + &current
-                + "\n\nls /:\n"
+                + "\n\nls -l / :\n"
                 + &root
-                + "\n\nls /bin:\n"
+                + "\n\nls /bin :\n"
                 + &bin
-                + "\n\nls /sbin:\n"
+                + "\n\nls /sbin :\n"
                 + &sbin
+                + "\n\nls -l /tmp :\n"
+                + &tmp
         },
     )
 }
 
 pub async fn content_ls2() -> StringTwinResult {
-    let current = run("ls", [].into_iter());
+    let current = ls(".");
     let root = ls("/");
     let bin = ls("/bin");
     let sbin = ls("/sbin");
@@ -379,39 +400,39 @@ pub async fn content_ls2() -> StringTwinResult {
     if true {
         let chained = current.and(root).and(bin).and(sbin);
 
-        let (all_ok, (((current, root), bin), sbin)) = chained.get();
+        let (all_ok, (((current, root), bin), sbin)) = chained.split();
     } else {
         // (bool, String) for each pair:
         if true {
-        } else if true {
             let chained = current.pairable();
-            let (all_ok, (current_ok, current)) = chained.get();
+            let (all_ok, (current_ok, current)) = chained.split();
             // -------
         } else if true {
             let chained = current.pairable().pair_first(root);
-            let (all_ok, (rest, (root_ok, root))) = chained.get();
+            let (all_ok, (rest, (root_ok, root))) = chained.split();
         } else if true {
             let chained = current.pairable().pair_first(root);
-            let (all_ok, ((current_ok, current), (root_ok, root))) = chained.get();
+            let (all_ok, ((current_ok, current), (root_ok, root))) = chained.split();
             // -------
         } else if true {
             let chained = current.pairable().pair_first(root).pair(bin);
-            let (all_ok, ((rest, (root_ok, root)), (bin_ok, bin))) = chained.get();
+            let (all_ok, ((rest, (root_ok, root)), (bin_ok, bin))) = chained.split();
         } else if true {
             let chained = current.pairable().pair_first(root).pair(bin);
-            let (all_ok, (((current_ok, current), (root_ok, root)), (bin_ok, bin))) = chained.get();
+            let (all_ok, (((current_ok, current), (root_ok, root)), (bin_ok, bin))) =
+                chained.split();
             // -------
         } else if true {
             let chained = current.pairable().pair_first(root).pair(bin).pair(sbin);
             let (all_ok, (((rest, (root_ok, root)), (bin_ok, bin)), (sbin_ok, sbin))) =
-                chained.get();
+                chained.split();
         } else if true {
             let chained = current.pairable().pair_first(root).pair(bin).pair(sbin);
             if true {
                 let (
                     all_ok,
                     ((((current_ok, current), (root_ok, root)), (bin_ok, bin)), (sbin_ok, sbin)),
-                ) = chained.get();
+                ) = chained.split();
             } else {
                 let flatten!(
                     all_ok,
@@ -419,21 +440,9 @@ pub async fn content_ls2() -> StringTwinResult {
                     (root_ok, root),
                     (bin_ok, bin),
                     (sbin_ok, sbin)
-                ) = chained.get();
+                ) = chained.split();
             }
         }
-        //
-        //let (all_ok, (((current_ok, current), (root_ok, root)), (bin_ok, bin)), (sbin_ok, sbin)) =
-        //chained.get();
-        //
-        // OR: Do return the structure containing (bool, String) pairs, but don't split them - keep
-        // them together, and pass them to a formatter:
-        //
-        // let (ok_err, (((current, root), bin), sbin)) = chained.get();
-        //
-        // twin_result(ok_err, "Current:\n" +formatted(current) +... )
-        //
-        //all_ok_or_any_errors
     }
     todo!()
 }
