@@ -1,10 +1,10 @@
 [package]
-name = "sys-info"
+name = "sysinfo-1-s4498989-deta-app"
 version = "0.1.0"
 edition = "2021"
-description = "System info & limits on Deta.Space"
-homepage = "https://sys-info-TODO.deta.space"
-repository = "https://github.com/peter-kehl/sysinfo-1-s4498989.deta.app.git"
+description = "System info & limits on Deta.Space."
+homepage = "https://sysinfo-1-s4498989.deta.app"
+repository = "https://github.com/peter-kehl/sysinfo-1-s4498989.deta.app"
 keywords = ["async", "cloud", "cloud-native", "deta", "deta.space"]
 license = "MIT OR Apache-2.0"
 
